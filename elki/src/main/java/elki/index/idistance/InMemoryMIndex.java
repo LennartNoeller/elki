@@ -15,7 +15,6 @@ import elki.database.ids.DoubleDBIDListIter;
 import elki.database.ids.KNNHeap;
 import elki.database.ids.KNNList;
 import elki.database.ids.ModifiableDoubleDBIDList;
-import elki.database.ids.DBID;
 import elki.database.query.distance.DistanceQuery;
 import elki.database.query.knn.KNNSearcher;
 import elki.database.query.range.RangeSearcher;
@@ -257,7 +256,109 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
     }
 
     @Override
-    public KNNList getKNN(O obj, int k) {
+    public KNNList getKNN(O queryObject, int k) {
+    //Array used for Pivot Filtering
+      DoubleIntPair[] referencePointDistances = computeDistanceToReferencePoints(distanceQuery, queryObject, referencePoints);
+      //Array used for iterating over clusters
+      DoubleIntPair[] rankedReferencePoints = Arrays.copyOf(referencePointDistances,numberOfReferencePoints);
+      Arrays.sort(rankedReferencePoints);
+      
+      KNNHeap kNNHeap = DBIDUtil.newHeap(k);
+      double kDistanceUpperBound = Double.MAX_VALUE;
+      
+      for(DoubleIntPair currentPair : rankedReferencePoints) {
+        final int pivot = currentPair.second;
+        final double queryPivotDistance = currentPair.first;
+      
+        //Double Pivot Distance Constraint
+        //Clusters that don't overlap with the search sphere with kDistanceUpperBound radius can be skipped
+        if((queryPivotDistance - rankedReferencePoints[0].first) > 2 * kDistanceUpperBound) break;
+        
+        final double lowerDistanceBound = queryPivotDistance - kDistanceUpperBound;
+        final double upperDistanceBound = queryPivotDistance + kDistanceUpperBound;
+        
+        //Range Pivot Distance Constraint
+        //Clusters that have no objects which could be in the search sphere
+        if(upperDistanceBound < rmin[pivot]) continue;
+        if(lowerDistanceBound > rmax[pivot]) continue;
+        
+        final ModifiableDoubleDBIDList currentPartition = mIndex[pivot];
+        final DoubleDBIDListIter forwardIterator = currentPartition.iter(), backwardIterator = currentPartition.iter();
+        
+        //move iterator to first object with larger a larger distance to its pivot than kDistanceUpperBound
+        binarySearch(currentPartition, forwardIterator, queryPivotDistance);
+        backwardIterator.seek(forwardIterator.getOffset()-1);
+        
+        boolean searchForward = forwardIterator.valid();
+        boolean searchBackward = backwardIterator.valid();
+        
+        //list of datapoints within bounds 
+        final ModifiableDoubleDBIDList possibleDataPoints = DBIDUtil.newDistanceDBIDList(currentPartition.size());
+                
+        //order all objects within [d(q,pi) - r, d(q,pi) + r] by deviation from queryPivotDistance
+        while(true) {
+          if(!searchForward && !searchBackward) break;
+          //keep searching towards pivot
+          if(!searchForward) {
+            possibleDataPoints.add(backwardIterator.doubleValue(),backwardIterator);
+            backwardIterator.retract();
+            if(!backwardIterator.valid()) searchBackward = false;
+            if(backwardIterator.doubleValue() < lowerDistanceBound) searchBackward = false;
+          }
+          //keep searching away from pivot
+          else if(!searchBackward) {
+            possibleDataPoints.add(forwardIterator.doubleValue(),forwardIterator);
+            forwardIterator.advance();
+            if(!forwardIterator.valid()) searchForward = false;
+            if(forwardIterator.doubleValue() > upperDistanceBound) searchForward = false;
+          }          
+          //add object with smaller deviation
+          else {
+            final double deviationForward = Math.abs(forwardIterator.doubleValue()-queryPivotDistance);
+            final double deviationBackward = Math.abs(backwardIterator.doubleValue()-queryPivotDistance);
+            
+            if(deviationForward < deviationBackward) {
+              possibleDataPoints.add(forwardIterator.doubleValue(),forwardIterator);
+              forwardIterator.advance();
+              if(!forwardIterator.valid()) searchForward = false;
+              if(forwardIterator.doubleValue() > upperDistanceBound) searchForward = false;
+              }
+            else {
+              possibleDataPoints.add(backwardIterator.doubleValue(),backwardIterator);
+              backwardIterator.retract();
+              if(!backwardIterator.valid()) searchBackward = false;
+              if(backwardIterator.doubleValue() < lowerDistanceBound) searchBackward = false;
+            }
+          }
+        }
+        
+        final DoubleDBIDListIter dataPointIterator = possibleDataPoints.iter();
+        
+        //check sorted objects 
+        while(dataPointIterator.valid()) {
+          final double deviation = Math.abs(dataPointIterator.doubleValue()-queryPivotDistance);
+          //stop searching cluster if distances exceed upper bound
+          if(deviation > kDistanceUpperBound) break;
+          
+          //Pivot Filtering
+          double maxValue = 0;
+          final int objectIndex = indexMap.get(dataPointIterator);
+          for(int j = 0; j < numberOfStoredDistances; j++) {
+            final int currentReferencePoint = referencePointIDs[objectIndex][j];
+            final double currentObjectReferencePointDistance = distancesToReferencePoints[objectIndex][j];
+            double currentValue =  Math.abs(currentObjectReferencePointDistance-referencePointDistances[currentReferencePoint].first);
+            if (currentValue > maxValue) maxValue = currentValue;
+          }
+          if(maxValue > kDistanceUpperBound) continue;
+          
+          //Compute actual distance
+          final double distance = refine(dataPointIterator, queryObject);
+          if(distance <= kDistanceUpperBound) kDistanceUpperBound = kNNHeap.insert(distance,dataPointIterator);
+          dataPointIterator.advance();
+        }
+        
+      }
+      return kNNHeap.toKNNList();
       
     }
   }
@@ -285,28 +386,32 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
       DoubleIntPair[] rankedReferencePoints = Arrays.copyOf(referencePointDistances,numberOfReferencePoints);
       Arrays.sort(rankedReferencePoints);
       
-      for(int i = 0; i < numberOfReferencePoints; i++) {
-        final int currentPivot = rankedReferencePoints[i].second;
-        final double currentDistanceToPivot = rankedReferencePoints[i].first;
+      for(DoubleIntPair currentPair : rankedReferencePoints) {
+        final int pivot = currentPair.second;
+        final double queryPivotDistance = currentPair.first;
+        
         //Double Pivot Distance Constraint
         //Since reference points are ordered we can stop when the condition is first fulfilled
-        if((currentDistanceToPivot - rankedReferencePoints[0].first) > 2 * searchRadius) break;
+        if((queryPivotDistance - rankedReferencePoints[0].first) > 2 * searchRadius) break;
+        
+        final double lowerDistanceBound = queryPivotDistance - searchRadius;
+        final double upperDistanceBound = queryPivotDistance + searchRadius;
         
         //Range Pivot Distance Constraint
-        final double lowerDistanceBound = currentDistanceToPivot - searchRadius;
-        final double upperDistanceBound = currentDistanceToPivot + searchRadius;
-        //Skip Cluster if no Objects are within range
-        if(upperDistanceBound < rmin[currentPivot]) continue;
-        if(lowerDistanceBound > rmax[currentPivot]) continue;
+        //Skip cluster if no objects are within range
+        if(upperDistanceBound < rmin[pivot]) continue;
+        if(lowerDistanceBound > rmax[pivot]) continue;
         
-        final ModifiableDoubleDBIDList currentPartition = mIndex[currentPivot];
-        DoubleDBIDListIter dataPointIterator = currentPartition.iter();
-        //move iterator to first object with distance to pivot >= lower bound
+        final ModifiableDoubleDBIDList currentPartition = mIndex[pivot];
+        final DoubleDBIDListIter dataPointIterator = currentPartition.iter();
+        
+        //move iterator to first object within distance range
         binarySearch(currentPartition, dataPointIterator, lowerDistanceBound);
         double currentObjectDistance = dataPointIterator.doubleValue();
         
-        //Check Objects within bounds 
+        //consider all objects within [d(q,pi) - r, d(q,pi) + r] range 
         while(dataPointIterator.valid()) {
+          //stop searching cluster if distances exceed upper bound
           if(currentObjectDistance > upperDistanceBound) break;
           
           //Pivot Filtering
