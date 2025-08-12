@@ -7,10 +7,12 @@ import java.util.Map;
 import elki.clustering.kmedoids.initialization.KMedoidsInitialization;
 import elki.data.type.TypeInformation;
 import elki.database.ids.ArrayDBIDs;
+import elki.database.ids.DBID;
 import elki.database.ids.DBIDArrayIter;
 import elki.database.ids.DBIDIter;
 import elki.database.ids.DBIDRef;
 import elki.database.ids.DBIDUtil;
+import elki.database.ids.DBIDVar;
 import elki.database.ids.DoubleDBIDListIter;
 import elki.database.ids.KNNHeap;
 import elki.database.ids.KNNList;
@@ -38,8 +40,8 @@ import elki.utilities.optionhandling.parameters.IntParameter;
 import elki.utilities.optionhandling.parameters.ObjectParameter;
 import elki.utilities.pairs.DoubleIntPair;
 
-public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements RangeIndex<O>, KNNIndex<O>{
-  
+public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements RangeIndex<O>, KNNIndex<O> {
+
   /**
    * Class logger.
    */
@@ -59,7 +61,7 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
    * Number of reference points.
    */
   private int numberOfReferencePoints;
-  
+
   private int numberOfStoredDistances;
 
   /**
@@ -71,28 +73,27 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
    * The index.
    */
   private ModifiableDoubleDBIDList[] mIndex;
-  
+
   /**
    * Map that stores a distanceIndex for each DBID object.
    */
-  private Map<DBIDRef, Integer> indexMap;
-  
+  private Map<DBID, Integer> indexMap;
+
   /**
-   * Distances from all DBID objects to their closest reference points. 
+   * Distances from all DBID objects to their closest reference points.
    */
   private double[][] distancesToReferencePoints;
-  
+
   /**
-   * Index of the reference point corresponding to a distance in distanceToReferencepoints
+   * Index of the reference point corresponding to a distance in
+   * distanceToReferencepoints
    */
   private int[][] referencePointIDs;
-  
-  
+
   private double rmin[];
-  
+
   private double rmax[];
-  
-  
+
   public InMemoryMIndex(Relation<O> relation, DistanceQuery<O> distance, KMedoidsInitialization<O> initialization, int numberOfReferencePoints, int numberOfStoredDistances) {
     super(relation);
     this.distanceQuery = distance;
@@ -103,66 +104,67 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
           + distance.getDistance().getClass() + " does not report itself as metric.\n" //
           + "M-Index will run, but may yield approximate results.");
     }
-    assert(numberOfStoredDistances > 0 && numberOfStoredDistances <= numberOfReferencePoints);
+    assert (numberOfStoredDistances > 0 && numberOfStoredDistances <= numberOfReferencePoints);
     this.numberOfStoredDistances = numberOfStoredDistances;
-   
+
   }
-  
+
   @Override
-  public void initialize(){
-    //initialize reference points
+  public void initialize() {
+    // initialize reference points
     referencePoints = DBIDUtil.ensureArray(initialization.chooseInitialMedoids(numberOfReferencePoints, relation.getDBIDs(), distanceQuery));
-    
+
     final int k = referencePoints.size();
     final int n = relation.size();
     int counter = 0;
-    
+
     mIndex = new ModifiableDoubleDBIDList[k];
     distancesToReferencePoints = new double[n][numberOfStoredDistances];
-    referencePointIDs = new int[n][numberOfStoredDistances];    
+    referencePointIDs = new int[n][numberOfStoredDistances];
+
+    rmin = new double[numberOfReferencePoints];
+    rmax = new double[numberOfReferencePoints];
     indexMap = new HashMap<>();
-    assert(k == numberOfReferencePoints);
-    
-    //Create a list for each cluster
-    for(int i = 0; i < k; i++ ) {
+    assert (k == numberOfReferencePoints);
+
+    // Create a list for each cluster
+    for(int i = 0; i < k; i++) {
       mIndex[i] = DBIDUtil.newDistanceDBIDList(relation.size() / (2 * k));
     }
-    
+
     DBIDArrayIter referencePointIterator = referencePoints.iter();
-    
-    //Compute distances for each data point
+
+    // Compute distances for each data point
     for(DBIDIter dataPointIterator = relation.iterDBIDs(); dataPointIterator.valid(); dataPointIterator.advance()) {
-      
+
       DoubleIntPair[] currentDistances = new DoubleIntPair[k];
-      
-      //Compute distances from current data point to all reference points
-      for(referencePointIterator.seek(0);referencePointIterator.valid();referencePointIterator.advance()) {
-        
+
+      // Compute distances from current data point to all reference points
+      for(referencePointIterator.seek(0); referencePointIterator.valid(); referencePointIterator.advance()) {
+
         final int i = referencePointIterator.getOffset();
         double distance = distanceQuery.distance(referencePointIterator, dataPointIterator);
         currentDistances[i] = new DoubleIntPair(distance, i);
       }
       Arrays.sort(currentDistances);
-      mIndex[currentDistances[0].second].add(currentDistances[0].first,dataPointIterator);
+      mIndex[currentDistances[0].second].add(currentDistances[0].first, dataPointIterator);
       for(int j = 0; j < numberOfStoredDistances; j++) {
         distancesToReferencePoints[counter][j] = currentDistances[j].first;
         referencePointIDs[counter][j] = currentDistances[j].second;
       }
-      //Add distanceIndex of current data point to map
-      indexMap.put(dataPointIterator, counter);
+      // Add distanceIndex of current data point to map
+      indexMap.put(DBIDUtil.deref(dataPointIterator), counter);
       counter++;
     }
-    
+
     for(int i = 0; i < k; i++) {
       mIndex[i].sort();
       rmin[i] = mIndex[i].doubleValue(0);
-      rmax[i] = mIndex[i].doubleValue(mIndex[i].size()-1);
+      rmax[i] = mIndex[i].doubleValue(mIndex[i].size() - 1);
     }
-    
-    
-    
+
   }
-  
+
   @Override
   public KNNSearcher<O> kNNByObject(DistanceQuery<O> distanceQuery, int maxk, int flags) {
     return distanceQuery.getRelation() == relation && this.getDistance().equals(distanceQuery.getDistance()) ? //
@@ -174,11 +176,11 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
     return distanceQuery.getRelation() == relation && this.getDistance().equals(distanceQuery.getDistance()) ? //
         new MIndexRangeSearcher(distanceQuery) : null;
   }
-  
+
   private Distance<? super O> getDistance() {
     return distanceQuery.getDistance();
   }
-  
+
   @Override
   public Logging getLogger() {
     return LOG;
@@ -195,13 +197,13 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
     LOG.statistics(new DoubleStatistic(InMemoryMIndex.class.getName() + ".size.mean", mm.getMean()));
     LOG.statistics(new LongStatistic(InMemoryMIndex.class.getName() + ".size.max", (int) mm.getMax()));
   }
-  
+
   /**
    * Computes and sorts the distances from query object to reference points.
    * 
-   * @param distanceQuery Distance function
-   * @param queryObject Query object
-   * @param referencePoints Reference points 
+   * @param distanceQuery   Distance function
+   * @param queryObject     Query object
+   * @param referencePoints Reference points
    */
   protected static <O> DoubleIntPair[] computeDistanceToReferencePoints(DistanceQuery<O> distanceQuery, O queryObject, ArrayDBIDs referencePoints) {
     DoubleIntPair[] referencePointDistances = new DoubleIntPair[referencePoints.size()];
@@ -217,16 +219,16 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
   /**
    * Seek an iterator to the first element with a value >= radius
    * 
-   * @param index Index to search
+   * @param index              Index to search
    * @param partitionInterator Iterator for a partition
-   * @param radius Distance to search to
+   * @param radius             Distance to search to
    */
   protected static void binarySearch(ModifiableDoubleDBIDList index, DoubleDBIDListIter partitionIterator, double radius) {
-    int lowerBound = 0, upperBound = index.size();
+    int lowerBound = 0, upperBound = index.size() - 1;
     while(lowerBound < upperBound) {
       final int medianPosition = (lowerBound + upperBound) >>> 1;
       final double medianValue = partitionIterator.seek(medianPosition).doubleValue();
-      
+
       if(medianValue >= radius) {
         upperBound = medianPosition;
       }
@@ -234,11 +236,33 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
         lowerBound = medianPosition + 1;
       }
     }
-    partitionIterator.seek(lowerBound+1);
-    
-   }
-    
-  
+    partitionIterator.seek(lowerBound);
+    partitionIterator.advance();
+
+  }
+
+  /**
+   * Compute max |d(o,pi) - d(q,pi)| over all object pivot distances stored
+   * 
+   * @param objectIndex               Index of the object
+   * @param distanceToReferencePoints Object-reference point distances
+   * @param referencePointIDs         IDs of the reference points, that object
+   *                                  reference point distances are stored for
+   * @param referencePointDistances   Distances from queryObject to all
+   *                                  reference points
+   */
+  protected static double pivotFilteringMaxDeviation(int objectIndex, double[][] distancesToReferencePoints, int[][] referencePointIDs, DoubleIntPair[] referencePointDistances) {
+    double maxValue = 0;
+    final int numberOfStoredDistances = referencePointIDs[0].length;
+    for(int j = 0; j < numberOfStoredDistances; j++) {
+      final int currentReferencePoint = referencePointIDs[objectIndex][j];
+      final double currentObjectReferencePointDistance = distancesToReferencePoints[objectIndex][j];
+      double currentValue = Math.abs(currentObjectReferencePointDistance - referencePointDistances[currentReferencePoint].first);
+      if(currentValue > maxValue)
+        maxValue = currentValue;
+    }
+    return maxValue;
+  }
 
   /**
    * kNN query implementation.
@@ -257,109 +281,105 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
 
     @Override
     public KNNList getKNN(O queryObject, int k) {
-    //Array used for Pivot Filtering
+      // Array used for Pivot Filtering
       DoubleIntPair[] referencePointDistances = computeDistanceToReferencePoints(distanceQuery, queryObject, referencePoints);
-      //Array used for iterating over clusters
-      DoubleIntPair[] rankedReferencePoints = Arrays.copyOf(referencePointDistances,numberOfReferencePoints);
+      // Array used for iterating over clusters
+      DoubleIntPair[] rankedReferencePoints = Arrays.copyOf(referencePointDistances, numberOfReferencePoints);
       Arrays.sort(rankedReferencePoints);
-      
+
       KNNHeap kNNHeap = DBIDUtil.newHeap(k);
-      double kDistanceUpperBound = Double.MAX_VALUE;
-      
+      double kDistanceUpperBound = Double.POSITIVE_INFINITY;
       for(DoubleIntPair currentPair : rankedReferencePoints) {
         final int pivot = currentPair.second;
         final double queryPivotDistance = currentPair.first;
-      
-        //Double Pivot Distance Constraint
-        //Clusters that don't overlap with the search sphere with kDistanceUpperBound radius can be skipped
-        if((queryPivotDistance - rankedReferencePoints[0].first) > 2 * kDistanceUpperBound) break;
         
-        final double lowerDistanceBound = queryPivotDistance - kDistanceUpperBound;
-        final double upperDistanceBound = queryPivotDistance + kDistanceUpperBound;
-        
-        //Range Pivot Distance Constraint
-        //Clusters that have no objects which could be in the search sphere
-        if(upperDistanceBound < rmin[pivot]) continue;
-        if(lowerDistanceBound > rmax[pivot]) continue;
-        
+        // Double Pivot Distance Constraint
+        if((queryPivotDistance - rankedReferencePoints[0].first) > 2 * kDistanceUpperBound)
+          break;
+
+        double lowerDistanceBound = queryPivotDistance - kDistanceUpperBound;
+        double upperDistanceBound = queryPivotDistance + kDistanceUpperBound;
+
+        // Range Pivot Distance Constraint
+        // Clusters that have no objects which could be in the search sphere
+        if(upperDistanceBound < rmin[pivot])
+          continue;
+        if(lowerDistanceBound > rmax[pivot])
+          continue;
+
         final ModifiableDoubleDBIDList currentPartition = mIndex[pivot];
-        final DoubleDBIDListIter forwardIterator = currentPartition.iter(), backwardIterator = currentPartition.iter();
-        
-        //move iterator to first object with larger a larger distance to its pivot than kDistanceUpperBound
+        final DoubleDBIDListIter forwardIterator = currentPartition.iter(),
+            backwardIterator = currentPartition.iter();
+
+        // move iterator to first object with a larger distance to its
+        // pivot than kDistanceUpperBound
         binarySearch(currentPartition, forwardIterator, queryPivotDistance);
-        backwardIterator.seek(forwardIterator.getOffset()-1);
-        
+        backwardIterator.seek(forwardIterator.getOffset() - 1);
+
         boolean searchForward = forwardIterator.valid();
         boolean searchBackward = backwardIterator.valid();
-        
-        //list of datapoints within bounds 
-        final ModifiableDoubleDBIDList possibleDataPoints = DBIDUtil.newDistanceDBIDList(currentPartition.size());
-                
-        //order all objects within [d(q,pi) - r, d(q,pi) + r] by deviation from queryPivotDistance
-        while(true) {
-          if(!searchForward && !searchBackward) break;
-          //keep searching towards pivot
+
+        DBID nextObject;
+        // consider all objects within [d(q,pi) - kDistanceUpperBound, d(q,pi) + kDistanceUpperBound]
+        while(searchForward || searchBackward) {
+          // keep searching towards pivot
           if(!searchForward) {
-            possibleDataPoints.add(backwardIterator.doubleValue(),backwardIterator);
+            nextObject = DBIDUtil.deref(backwardIterator);
             backwardIterator.retract();
-            if(!backwardIterator.valid()) searchBackward = false;
-            if(backwardIterator.doubleValue() < lowerDistanceBound) searchBackward = false;
           }
-          //keep searching away from pivot
+          // keep searching away from pivot
           else if(!searchBackward) {
-            possibleDataPoints.add(forwardIterator.doubleValue(),forwardIterator);
+            nextObject = DBIDUtil.deref(forwardIterator);
             forwardIterator.advance();
-            if(!forwardIterator.valid()) searchForward = false;
-            if(forwardIterator.doubleValue() > upperDistanceBound) searchForward = false;
-          }          
-          //add object with smaller deviation
+          }
+          // consider object with smaller deviation of their distance to their
+          // pivot from kDistanceUpperBound
           else {
-            final double deviationForward = Math.abs(forwardIterator.doubleValue()-queryPivotDistance);
-            final double deviationBackward = Math.abs(backwardIterator.doubleValue()-queryPivotDistance);
-            
+            final double deviationForward = Math.abs(forwardIterator.doubleValue() - queryPivotDistance);
+            final double deviationBackward = Math.abs(backwardIterator.doubleValue() - queryPivotDistance);
+
             if(deviationForward < deviationBackward) {
-              possibleDataPoints.add(forwardIterator.doubleValue(),forwardIterator);
+              nextObject = DBIDUtil.deref(forwardIterator);
               forwardIterator.advance();
-              if(!forwardIterator.valid()) searchForward = false;
-              if(forwardIterator.doubleValue() > upperDistanceBound) searchForward = false;
-              }
+            }
             else {
-              possibleDataPoints.add(backwardIterator.doubleValue(),backwardIterator);
+              nextObject = DBIDUtil.deref(backwardIterator);
               backwardIterator.retract();
-              if(!backwardIterator.valid()) searchBackward = false;
-              if(backwardIterator.doubleValue() < lowerDistanceBound) searchBackward = false;
             }
           }
-        }
-        
-        final DoubleDBIDListIter dataPointIterator = possibleDataPoints.iter();
-        
-        //check sorted objects 
-        while(dataPointIterator.valid()) {
-          final double deviation = Math.abs(dataPointIterator.doubleValue()-queryPivotDistance);
-          //stop searching cluster if distances exceed upper bound
-          if(deviation > kDistanceUpperBound) break;
-          
-          //Pivot Filtering
-          double maxValue = 0;
-          final int objectIndex = indexMap.get(dataPointIterator);
-          for(int j = 0; j < numberOfStoredDistances; j++) {
-            final int currentReferencePoint = referencePointIDs[objectIndex][j];
-            final double currentObjectReferencePointDistance = distancesToReferencePoints[objectIndex][j];
-            double currentValue =  Math.abs(currentObjectReferencePointDistance-referencePointDistances[currentReferencePoint].first);
-            if (currentValue > maxValue) maxValue = currentValue;
+          // pivot filtering 
+          final int objectIndex = indexMap.get(nextObject);
+          double maxValue = pivotFilteringMaxDeviation(objectIndex, distancesToReferencePoints, referencePointIDs, referencePointDistances);
+          if(maxValue <= kDistanceUpperBound) {
+            final double distance = refine(nextObject, queryObject);
+            if(distance < kDistanceUpperBound) {
+              kNNHeap.insert(distance, nextObject);
+              kDistanceUpperBound = kNNHeap.getKNNDistance();
+              
+              //adjust bounds
+              lowerDistanceBound = queryPivotDistance - kDistanceUpperBound;
+              upperDistanceBound = queryPivotDistance + kDistanceUpperBound;
+            }
           }
-          if(maxValue > kDistanceUpperBound) continue;
-          
-          //Compute actual distance
-          final double distance = refine(dataPointIterator, queryObject);
-          if(distance <= kDistanceUpperBound) kDistanceUpperBound = kNNHeap.insert(distance,dataPointIterator);
-          dataPointIterator.advance();
+          // check if forward search continues
+          if(searchForward) {
+            if(!forwardIterator.valid())
+              searchForward = false;
+            else if(forwardIterator.doubleValue() > upperDistanceBound)
+              searchForward = false;
+          }
+          // check if backward search continues
+          if(searchBackward) {
+            if(!backwardIterator.valid())
+              searchBackward = false;
+            else if(backwardIterator.doubleValue() < lowerDistanceBound)
+              searchBackward = false;
+          }
         }
-        
       }
-      return kNNHeap.toKNNList();
-      
+      KNNList list = kNNHeap.toKNNList();
+      return list;
+
     }
   }
 
@@ -380,58 +400,63 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
 
     @Override
     public ModifiableDoubleDBIDList getRange(O queryObject, double searchRadius, ModifiableDoubleDBIDList result) {
-      //Array used for Pivot Filtering
+      // Array used for Pivot Filtering
       DoubleIntPair[] referencePointDistances = computeDistanceToReferencePoints(distanceQuery, queryObject, referencePoints);
-      //Array used for iterating over clusters
-      DoubleIntPair[] rankedReferencePoints = Arrays.copyOf(referencePointDistances,numberOfReferencePoints);
+      // Array used for iterating over clusters
+      DoubleIntPair[] rankedReferencePoints = Arrays.copyOf(referencePointDistances, numberOfReferencePoints);
       Arrays.sort(rankedReferencePoints);
-      
+
+      DBIDUtil.ensureArray(relation.getDBIDs());
+
       for(DoubleIntPair currentPair : rankedReferencePoints) {
         final int pivot = currentPair.second;
         final double queryPivotDistance = currentPair.first;
-        
-        //Double Pivot Distance Constraint
-        //Since reference points are ordered we can stop when the condition is first fulfilled
-        if((queryPivotDistance - rankedReferencePoints[0].first) > 2 * searchRadius) break;
-        
+
+        // Double Pivot Distance Constraint
+        // Since reference points are ordered we can stop when the condition is
+        // first fulfilled
+        if((queryPivotDistance - rankedReferencePoints[0].first) > 2 * searchRadius)
+          break;
+
         final double lowerDistanceBound = queryPivotDistance - searchRadius;
         final double upperDistanceBound = queryPivotDistance + searchRadius;
-        
-        //Range Pivot Distance Constraint
-        //Skip cluster if no objects are within range
-        if(upperDistanceBound < rmin[pivot]) continue;
-        if(lowerDistanceBound > rmax[pivot]) continue;
-        
+
+        // Range Pivot Distance Constraint
+        if(upperDistanceBound < rmin[pivot])
+          continue;
+        if(lowerDistanceBound > rmax[pivot])
+          continue;
+
         final ModifiableDoubleDBIDList currentPartition = mIndex[pivot];
         final DoubleDBIDListIter dataPointIterator = currentPartition.iter();
-        
-        //move iterator to first object within distance range
+
+        // move iterator to first object within distance range
         binarySearch(currentPartition, dataPointIterator, lowerDistanceBound);
+        if(!dataPointIterator.valid() || dataPointIterator.doubleValue() > upperDistanceBound)
+          continue;
         double currentObjectDistance = dataPointIterator.doubleValue();
-        
-        //consider all objects within [d(q,pi) - r, d(q,pi) + r] range 
+
+        // consider all objects within [d(q,pi) - r, d(q,pi) + r] range
         while(dataPointIterator.valid()) {
-          //stop searching cluster if distances exceed upper bound
-          if(currentObjectDistance > upperDistanceBound) break;
-          
-          //Pivot Filtering
-          double maxValue = 0;
-          final int objectIndex = indexMap.get(dataPointIterator);
-          for(int j = 0; j < numberOfStoredDistances; j++) {
-            final int currentReferencePoint = referencePointIDs[objectIndex][j];
-            final double currentObjectReferencePointDistance = distancesToReferencePoints[objectIndex][j];
-            double currentValue =  Math.abs(currentObjectReferencePointDistance-referencePointDistances[currentReferencePoint].first);
-            if (currentValue > maxValue) maxValue = currentValue;
+          // stop searching cluster if distances exceed upper bound
+          if(currentObjectDistance > upperDistanceBound)
+            break;
+
+          // Pivot Filtering
+          final int objectIndex = indexMap.get(DBIDUtil.deref(dataPointIterator));
+          double maxValue = pivotFilteringMaxDeviation(objectIndex, distancesToReferencePoints, referencePointIDs, referencePointDistances);
+          if(maxValue > searchRadius) {
+            dataPointIterator.advance();
+            continue;
           }
-          if(maxValue > searchRadius) continue;
-          
-          //Compute actual distance
+
+          // Compute actual distance
           final double distance = refine(dataPointIterator, queryObject);
-          if(distance <= searchRadius) result.add(distance,dataPointIterator);
+          if(distance <= searchRadius)
+            result.add(distance, dataPointIterator);
           dataPointIterator.advance();
           currentObjectDistance = dataPointIterator.doubleValue();
         }
-        
       }
       return result;
     }
@@ -461,7 +486,7 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
      * Number of reference points
      */
     int k;
-    
+
     /**
      * Number of distances to be stored per data point
      */
@@ -470,10 +495,11 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
     /**
      * Constructor.
      * 
-     * @param distance Distance function
-     * @param initialization Initialization method
-     * @param k Number of reference points
-     * @param numberOFStoredDistances Number of distances to be stored per data point
+     * @param distance                Distance function
+     * @param initialization          Initialization method
+     * @param k                       Number of reference points
+     * @param numberOFStoredDistances Number of distances to be stored per data
+     *                                point
      */
     public Factory(Distance<? super V> distance, KMedoidsInitialization<V> initialization, int k, int numberOfStoredDistances) {
       super();
@@ -522,6 +548,7 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
        * Number of distances stored per data point.
        */
       public static final OptionID STORED_DISTANCES_ID = new OptionID("M-Index.stored_distances", "Number of distances stored per data point.");
+
       /**
        * Distance function to use.
        */
@@ -536,8 +563,9 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
        * Number of reference points
        */
       int k;
-      
+
       int numberOfStoredDistances;
+
       @Override
       public void configure(Parameterization config) {
         new ObjectParameter<Distance<? super V>>(DISTANCE_ID, Distance.class) //
