@@ -46,49 +46,49 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
   /**
    * Distance query.
    */
-  private DistanceQuery<O> distanceQuery;
+  protected DistanceQuery<O> distanceQuery;
 
   /**
    * Initialization method.
    */
-  private KMedoidsInitialization<O> initialization;
+  protected KMedoidsInitialization<O> initialization;
 
   /**
    * Number of reference points.
    */
-  private int numberOfReferencePoints;
+  protected int numberOfReferencePoints;
 
-  private int numberOfStoredDistances;
+  protected int numberOfStoredDistances;
 
   /**
    * Reference points.
    */
-  private ArrayDBIDs referencePoints;
+  protected ArrayDBIDs referencePoints;
 
   /**
    * The index.
    */
-  private ModifiableDoubleDBIDList[] mIndex;
+  protected ModifiableDoubleDBIDList[] mIndex;
 
   /**
    * Map that stores a distanceIndex for each DBID object.
    */
-  private Map<DBID, Integer> indexMap;
+  protected Map<DBID, Integer> indexMap;
 
   /**
    * Distances from all DBID objects to their closest reference points.
    */
-  private double[][] distancesToReferencePoints;
+  protected double[][] distancesToReferencePoints;
 
   /**
    * Index of the reference point corresponding to a distance in
    * distanceToReferencepoints
    */
-  private int[][] referencePointIDs;
+  protected int[][] referencePointIDs;
 
-  private double rmin[];
+  protected double rmin[];
 
-  private double rmax[];
+  protected double rmax[];
 
   public InMemoryMIndex(Relation<O> relation, DistanceQuery<O> distance, KMedoidsInitialization<O> initialization, int numberOfReferencePoints, int numberOfStoredDistances) {
     super(relation);
