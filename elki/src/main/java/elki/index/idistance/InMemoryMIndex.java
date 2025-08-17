@@ -430,10 +430,10 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
         binarySearch(currentPartition, dataPointIterator, lowerDistanceBound);
         if(!dataPointIterator.valid() || dataPointIterator.doubleValue() > upperDistanceBound)
           continue;
-        double currentObjectDistance = dataPointIterator.doubleValue();
 
         // consider all objects within [d(q,pi) - r, d(q,pi) + r] range
         while(dataPointIterator.valid()) {
+          double currentObjectDistance = dataPointIterator.doubleValue();
           // stop searching cluster if distances exceed upper bound
           if(currentObjectDistance > upperDistanceBound)
             break;
@@ -451,7 +451,6 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
           if(distance <= searchRadius)
             result.add(distance, dataPointIterator);
           dataPointIterator.advance();
-          currentObjectDistance = dataPointIterator.doubleValue();
         }
       }
       return result;
