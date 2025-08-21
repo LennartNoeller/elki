@@ -483,7 +483,6 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
         return new DoubleIntPair(distance(), objectID());
       }
     }
-
   }
 
   /**
