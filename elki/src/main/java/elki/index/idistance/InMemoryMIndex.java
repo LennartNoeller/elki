@@ -1,17 +1,12 @@
 package elki.index.idistance;
 
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
 
 import elki.clustering.kmedoids.initialization.KMedoidsInitialization;
 import elki.data.type.TypeInformation;
 import elki.database.ids.ArrayDBIDs;
-import elki.database.ids.DBID;
 import elki.database.ids.DBIDArrayIter;
-import elki.database.ids.DBIDIter;
 import elki.database.ids.DBIDUtil;
-import elki.database.ids.DoubleDBIDListIter;
 import elki.database.ids.KNNHeap;
 import elki.database.ids.KNNList;
 import elki.database.ids.ModifiableDoubleDBIDList;
@@ -28,6 +23,8 @@ import elki.logging.Logging;
 import elki.logging.statistics.DoubleStatistic;
 import elki.logging.statistics.LongStatistic;
 import elki.math.MeanVarianceMinMax;
+import elki.utilities.datastructures.arrays.DoubleIntegerArrayQuickSort;
+import elki.utilities.datastructures.iterator.Iter;
 import elki.utilities.optionhandling.OptionID;
 import elki.utilities.optionhandling.Parameterizer;
 import elki.utilities.optionhandling.constraints.CommonConstraints;
@@ -68,12 +65,11 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
   /**
    * The index.
    */
-  protected ModifiableDoubleDBIDList[] mIndex;
+  protected DoubleIntegerList[] mIndex;
 
   /**
    * Map that stores a distanceIndex for each DBID object.
    */
-  protected Map<DBID, Integer> indexMap;
 
   /**
    * Distances from all DBID objects to their closest reference points.
@@ -82,16 +78,28 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
 
   /**
    * Index of the reference point corresponding to a distance in
-   * distanceToReferencepoints
+   * distanceToReferencepoints.
    */
   protected int[][] referencePointIDs;
 
+  /**
+   * Minimum radius of each cluster.
+   */
   protected double rmin[];
 
+  /**
+   * Maximum radius of each cluster.
+   */
   protected double rmax[];
+
+  /**
+   * The actual DBIDs.
+   */
+  protected ArrayDBIDs indexedRelation;
 
   public InMemoryMIndex(Relation<O> relation, DistanceQuery<O> distance, KMedoidsInitialization<O> initialization, int numberOfReferencePoints, int numberOfStoredDistances) {
     super(relation);
+    indexedRelation = DBIDUtil.ensureArray(relation.getDBIDs());
     this.distanceQuery = distance;
     this.initialization = initialization;
     this.numberOfReferencePoints = numberOfReferencePoints;
@@ -102,7 +110,6 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
     }
     assert (numberOfStoredDistances > 0 && numberOfStoredDistances <= numberOfReferencePoints);
     this.numberOfStoredDistances = numberOfStoredDistances;
-
   }
 
   @Override
@@ -112,26 +119,24 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
 
     final int k = referencePoints.size();
     final int n = relation.size();
-    int counter = 0;
 
-    mIndex = new ModifiableDoubleDBIDList[k];
+    mIndex = new DoubleIntegerList[k];
     distancesToReferencePoints = new double[n][numberOfStoredDistances];
     referencePointIDs = new int[n][numberOfStoredDistances];
 
     rmin = new double[numberOfReferencePoints];
     rmax = new double[numberOfReferencePoints];
-    indexMap = new HashMap<>();
     assert (k == numberOfReferencePoints);
 
     // Create a list for each cluster
     for(int i = 0; i < k; i++) {
-      mIndex[i] = DBIDUtil.newDistanceDBIDList(relation.size() / (2 * k));
+      mIndex[i] = new DoubleIntegerList(relation.size() / (2 * k));
     }
 
     DBIDArrayIter referencePointIterator = referencePoints.iter();
 
     // Compute distances for each data point
-    for(DBIDIter dataPointIterator = relation.iterDBIDs(); dataPointIterator.valid(); dataPointIterator.advance()) {
+    for(DBIDArrayIter dataPointIterator = indexedRelation.iter(); dataPointIterator.valid(); dataPointIterator.advance()) {
 
       DoubleIntPair[] currentDistances = new DoubleIntPair[k];
 
@@ -143,20 +148,17 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
         currentDistances[i] = new DoubleIntPair(distance, i);
       }
       Arrays.sort(currentDistances);
-      mIndex[currentDistances[0].second].add(currentDistances[0].first, dataPointIterator);
+      mIndex[currentDistances[0].second].add(currentDistances[0].first, dataPointIterator.getOffset());
       for(int j = 0; j < numberOfStoredDistances; j++) {
-        distancesToReferencePoints[counter][j] = currentDistances[j].first;
-        referencePointIDs[counter][j] = currentDistances[j].second;
+        distancesToReferencePoints[dataPointIterator.getOffset()][j] = currentDistances[j].first;
+        referencePointIDs[dataPointIterator.getOffset()][j] = currentDistances[j].second;
       }
-      // Add distanceIndex of current data point to map
-      indexMap.put(DBIDUtil.deref(dataPointIterator), counter);
-      counter++;
     }
 
     for(int i = 0; i < k; i++) {
       mIndex[i].sort();
-      rmin[i] = mIndex[i].doubleValue(0);
-      rmax[i] = mIndex[i].doubleValue(mIndex[i].size() - 1);
+      rmin[i] = mIndex[i].getDistance(0);
+      rmax[i] = mIndex[i].getDistance(mIndex[i].size() - 1);
     }
 
   }
@@ -219,11 +221,11 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
    * @param partitionInterator Iterator for a partition
    * @param radius             Distance to search to
    */
-  protected static void binarySearch(ModifiableDoubleDBIDList index, DoubleDBIDListIter partitionIterator, double radius) {
+  protected static void binarySearch(DoubleIntegerList index, elki.index.idistance.InMemoryMIndex.DoubleIntegerList.DoubleIntegerListIter partitionIterator, double radius) {
     int lowerBound = 0, upperBound = index.size() - 1;
     while(lowerBound < upperBound) {
       final int medianPosition = (lowerBound + upperBound) >>> 1;
-      final double medianValue = partitionIterator.seek(medianPosition).doubleValue();
+      final double medianValue = partitionIterator.seek(medianPosition).distance();
 
       if(medianValue >= radius) {
         upperBound = medianPosition;
@@ -234,7 +236,6 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
     }
     partitionIterator.seek(lowerBound);
     partitionIterator.advance();
-
   }
 
   /**
@@ -247,17 +248,242 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
    * @param referencePointDistances   Distances from queryObject to all
    *                                  reference points
    */
-  protected static double pivotFilteringMaxDeviation(int objectIndex, double[][] distancesToReferencePoints, int[][] referencePointIDs, DoubleIntPair[] referencePointDistances) {
-    double maxValue = 0;
+  protected static boolean pivotFilteringMaxDeviation(double upperBound, int objectIndex, double[][] distancesToReferencePoints, int[][] referencePointIDs, DoubleIntPair[] referencePointDistances) {
     final int numberOfStoredDistances = referencePointIDs[0].length;
     for(int j = 0; j < numberOfStoredDistances; j++) {
       final int currentReferencePoint = referencePointIDs[objectIndex][j];
       final double currentObjectReferencePointDistance = distancesToReferencePoints[objectIndex][j];
       double currentValue = Math.abs(currentObjectReferencePointDistance - referencePointDistances[currentReferencePoint].first);
-      if(currentValue > maxValue)
-        maxValue = currentValue;
+      if(currentValue > upperBound)
+        return false;
     }
-    return maxValue;
+    return true;
+  }
+
+  /**
+   * List of double integer pairs.
+   */
+  protected static class DoubleIntegerList {
+
+    /**
+     * distance values.
+     */
+    private double[] distances;
+
+    /**
+     * object IDs.
+     */
+    private int[] objectIDs;
+
+    /**
+     * Size of the list.
+     */
+    private int size;
+
+    /**
+     * Constructor for list with initial size.
+     * 
+     * @param size initial array sizes
+     */
+    public DoubleIntegerList(int size) {
+      this.distances = size > 0 ? new double[size] : new double[0];
+      this.objectIDs = size > 0 ? new int[size] : new int[0];
+      this.size = 0;
+    }
+
+    /**
+     * Constructor for empty list.
+     */
+    public DoubleIntegerList() {
+      this.distances = new double[0];
+      this.objectIDs = new int[0];
+      this.size = 0;
+    }
+
+    /**
+     * Add a new distance and id to the list.
+     * 
+     * @param distance distance value
+     * @param id       object ID
+     */
+    public void add(double distance, int id) {
+      addInternal(distance, id);
+    }
+
+    /**
+     * Add new distance ID pair to the list.
+     * 
+     * @param pair Pair of distance and object ID
+     */
+    public void add(DoubleIntPair pair) {
+      addInternal(pair.first, pair.second);
+    }
+
+    /*
+     * Add pair and increase list capacity of necessary. 
+     */
+    private void addInternal(double distance, int id) {
+      if(size == distances.length) {
+        grow();
+      }
+      distances[size] = distance;
+      objectIDs[size] = id;
+      ++size;
+    }
+
+    /*
+     * Increase the capacity of both arrays.
+     */
+    private void grow() {
+      if(distances.length == 0) {
+        distances = new double[32];
+        objectIDs = new int[32];
+        return;
+      }
+      final int len = distances.length;
+      final int newlength = len + (len >> 1) + 1;
+      double[] odists = distances;
+      distances = new double[newlength];
+      System.arraycopy(odists, 0, distances, 0, odists.length);
+      int[] oids = objectIDs;
+      objectIDs = new int[newlength];
+      System.arraycopy(oids, 0, objectIDs, 0, oids.length);
+    }
+
+    /**
+     * Sort list by distances in increasing order:
+     */
+    protected void sort() {
+      DoubleIntegerArrayQuickSort.sort(distances, objectIDs, 0, size);
+    }
+
+    /*
+     * Get ID value.
+     */
+    protected int getID(int index) {
+      assert (index >= 0);
+      assert (index < size);
+      return objectIDs[index];
+    }
+
+    /**
+     * get distance value.
+     */
+    protected double getDistance(int index) {
+      assert (index >= 0);
+      assert (index < size);
+      return distances[index];
+    }
+
+    /**
+     * Get distance ID pair.
+     * 
+     * @param index list index of the pair
+     */
+    protected DoubleIntPair getPair(int index) {
+      assert (index >= 0);
+      assert (index < size);
+      return new DoubleIntPair(distances[0], objectIDs[index]);
+    }
+
+    /**
+     * Get size of the list.
+     */
+    protected int size() {
+      return size;
+    }
+
+    /**
+     * Get a list iterator.
+     */
+    protected DoubleIntegerListIter iter() {
+      return new DoubleIntegerListIter();
+    }
+
+    /**
+     * Iterator for list.
+     */
+    protected class DoubleIntegerListIter implements Iter {
+      /**
+       * Current offset.
+       */
+      int pos = 0;
+
+      /**
+       * Constructor.
+       */
+      private DoubleIntegerListIter() {
+        super();
+      }
+
+      @Override
+      public boolean valid() {
+        return pos < size && pos >= 0;
+      }
+
+      @Override
+      public DoubleIntegerListIter advance() {
+        ++pos;
+        return this;
+      }
+
+      /**
+       * Get current iterator position.
+       */
+      public int getOffset() {
+        return pos;
+      }
+
+      /**
+       * Advance iterator by multiple steps.
+       * 
+       * @param count number of steps
+       */
+      public DoubleIntegerListIter advance(int count) {
+        pos += count;
+        return this;
+      }
+
+      /**
+       * Retract iterator.
+       */
+      public DoubleIntegerListIter retract() {
+        --pos;
+        return this;
+      }
+
+      /**
+       * Move iterator to position.
+       * 
+       * @param off new position
+       */
+      public DoubleIntegerListIter seek(int off) {
+        pos = off;
+        return this;
+      }
+
+      /**
+       * Get current distance.
+       */
+      public double distance() {
+        return distances[pos];
+      }
+
+      /**
+       * Get current object ID.
+       */
+      public int objectID() {
+        return objectIDs[pos];
+      }
+
+      /**
+       * Get current distance ID pair.
+       */
+      public DoubleIntPair pair() {
+        return new DoubleIntPair(distance(), objectID());
+      }
+    }
+
   }
 
   /**
@@ -288,7 +514,7 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
       for(DoubleIntPair currentPair : rankedReferencePoints) {
         final int pivot = currentPair.second;
         final double queryPivotDistance = currentPair.first;
-        
+
         // Double Pivot Distance Constraint
         if((queryPivotDistance - rankedReferencePoints[0].first) > 2 * kDistanceUpperBound)
           break;
@@ -303,9 +529,10 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
         if(lowerDistanceBound > rmax[pivot])
           continue;
 
-        final ModifiableDoubleDBIDList currentPartition = mIndex[pivot];
-        final DoubleDBIDListIter forwardIterator = currentPartition.iter(),
-            backwardIterator = currentPartition.iter();
+        final DoubleIntegerList currentPartition = mIndex[pivot];
+        final elki.index.idistance.InMemoryMIndex.DoubleIntegerList.DoubleIntegerListIter forwardIterator = currentPartition.iter();
+        final elki.index.idistance.InMemoryMIndex.DoubleIntegerList.DoubleIntegerListIter backwardIterator = currentPartition.iter();
+        final DBIDArrayIter indexedRelationIter = indexedRelation.iter();
 
         // move iterator to first object with a larger distance to its
         // pivot than kDistanceUpperBound
@@ -315,44 +542,46 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
         boolean searchForward = forwardIterator.valid();
         boolean searchBackward = backwardIterator.valid();
 
-        DBID nextObject;
-        // consider all objects within [d(q,pi) - kDistanceUpperBound, d(q,pi) + kDistanceUpperBound]
+        int nextObjectIndex;
+        // consider all objects within [d(q,pi) - kDistanceUpperBound, d(q,pi) +
+        // kDistanceUpperBound]
         while(searchForward || searchBackward) {
           // keep searching towards pivot
           if(!searchForward) {
-            nextObject = DBIDUtil.deref(backwardIterator);
+            nextObjectIndex = backwardIterator.objectID();
             backwardIterator.retract();
           }
           // keep searching away from pivot
           else if(!searchBackward) {
-            nextObject = DBIDUtil.deref(forwardIterator);
+            nextObjectIndex = forwardIterator.objectID();
             forwardIterator.advance();
           }
           // consider object with smaller deviation of their distance to their
           // pivot from kDistanceUpperBound
           else {
-            final double deviationForward = Math.abs(forwardIterator.doubleValue() - queryPivotDistance);
-            final double deviationBackward = Math.abs(backwardIterator.doubleValue() - queryPivotDistance);
+            final double deviationForward = Math.abs(forwardIterator.distance() - queryPivotDistance);
+            final double deviationBackward = Math.abs(backwardIterator.distance() - queryPivotDistance);
 
             if(deviationForward < deviationBackward) {
-              nextObject = DBIDUtil.deref(forwardIterator);
+              nextObjectIndex = forwardIterator.objectID();
               forwardIterator.advance();
             }
             else {
-              nextObject = DBIDUtil.deref(backwardIterator);
+              nextObjectIndex = backwardIterator.objectID();
               backwardIterator.retract();
             }
           }
-          // pivot filtering 
-          final int objectIndex = indexMap.get(nextObject);
-          double maxValue = pivotFilteringMaxDeviation(objectIndex, distancesToReferencePoints, referencePointIDs, referencePointDistances);
-          if(maxValue <= kDistanceUpperBound) {
-            final double distance = refine(nextObject, queryObject);
+          // pivot filtering
+          boolean success = pivotFilteringMaxDeviation(kDistanceUpperBound, nextObjectIndex, distancesToReferencePoints, referencePointIDs, referencePointDistances);
+
+          if(success) {
+            indexedRelationIter.seek(nextObjectIndex);
+            final double distance = refine(indexedRelationIter, queryObject);
             if(distance < kDistanceUpperBound) {
-              kNNHeap.insert(distance, nextObject);
+              kNNHeap.insert(distance, indexedRelationIter);
               kDistanceUpperBound = kNNHeap.getKNNDistance();
-              
-              //adjust bounds
+
+              // adjust bounds
               lowerDistanceBound = queryPivotDistance - kDistanceUpperBound;
               upperDistanceBound = queryPivotDistance + kDistanceUpperBound;
             }
@@ -361,21 +590,20 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
           if(searchForward) {
             if(!forwardIterator.valid())
               searchForward = false;
-            else if(forwardIterator.doubleValue() > upperDistanceBound)
+            else if(forwardIterator.distance() > upperDistanceBound)
               searchForward = false;
           }
           // check if backward search continues
           if(searchBackward) {
             if(!backwardIterator.valid())
               searchBackward = false;
-            else if(backwardIterator.doubleValue() < lowerDistanceBound)
+            else if(backwardIterator.distance() < lowerDistanceBound)
               searchBackward = false;
           }
         }
       }
       KNNList list = kNNHeap.toKNNList();
       return list;
-
     }
   }
 
@@ -404,6 +632,8 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
 
       DBIDUtil.ensureArray(relation.getDBIDs());
 
+      final DBIDArrayIter indexedRelationIter = indexedRelation.iter();
+
       for(DoubleIntPair currentPair : rankedReferencePoints) {
         final int pivot = currentPair.second;
         final double queryPivotDistance = currentPair.first;
@@ -423,33 +653,32 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
         if(lowerDistanceBound > rmax[pivot])
           continue;
 
-        final ModifiableDoubleDBIDList currentPartition = mIndex[pivot];
-        final DoubleDBIDListIter dataPointIterator = currentPartition.iter();
+        final DoubleIntegerList currentPartition = mIndex[pivot];
+        final elki.index.idistance.InMemoryMIndex.DoubleIntegerList.DoubleIntegerListIter dataPointIterator = currentPartition.iter();
 
         // move iterator to first object within distance range
         binarySearch(currentPartition, dataPointIterator, lowerDistanceBound);
-        if(!dataPointIterator.valid() || dataPointIterator.doubleValue() > upperDistanceBound)
+        if(!dataPointIterator.valid() || dataPointIterator.distance() > upperDistanceBound)
           continue;
 
         // consider all objects within [d(q,pi) - r, d(q,pi) + r] range
         while(dataPointIterator.valid()) {
-          double currentObjectDistance = dataPointIterator.doubleValue();
+          double currentObjectDistance = dataPointIterator.distance();
           // stop searching cluster if distances exceed upper bound
           if(currentObjectDistance > upperDistanceBound)
             break;
 
           // Pivot Filtering
-          final int objectIndex = indexMap.get(DBIDUtil.deref(dataPointIterator));
-          double maxValue = pivotFilteringMaxDeviation(objectIndex, distancesToReferencePoints, referencePointIDs, referencePointDistances);
-          if(maxValue > searchRadius) {
+          boolean success = pivotFilteringMaxDeviation(searchRadius, dataPointIterator.objectID(), distancesToReferencePoints, referencePointIDs, referencePointDistances);
+          if(!success) {
             dataPointIterator.advance();
             continue;
           }
-
           // Compute actual distance
-          final double distance = refine(dataPointIterator, queryObject);
+          indexedRelationIter.seek(dataPointIterator.objectID());
+          final double distance = refine(indexedRelationIter, queryObject);
           if(distance <= searchRadius)
-            result.add(distance, dataPointIterator);
+            result.add(distance, indexedRelationIter);
           dataPointIterator.advance();
         }
       }
