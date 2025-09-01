@@ -248,16 +248,18 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
    * @param referencePointDistances   Distances from queryObject to all
    *                                  reference points
    */
-  protected static boolean pivotFilteringMaxDeviation(double upperBound, int objectIndex, double[][] distancesToReferencePoints, int[][] referencePointIDs, DoubleIntPair[] referencePointDistances) {
-    final int numberOfStoredDistances = referencePointIDs[0].length;
-    for(int j = 0; j < numberOfStoredDistances; j++) {
-      final int currentReferencePoint = referencePointIDs[objectIndex][j];
-      final double currentObjectReferencePointDistance = distancesToReferencePoints[objectIndex][j];
-      double currentValue = Math.abs(currentObjectReferencePointDistance - referencePointDistances[currentReferencePoint].first);
-      if(currentValue > upperBound)
-        return false;
+  protected static boolean pivotFilteringMaxDeviation(double[] distancesToReferencePoints, int[] referencePointIDs, double[] upperBound, double[] lowerBound) {
+    for(int i = 0; i < distancesToReferencePoints.length; i++) {
+      if(distancesToReferencePoints[i] > upperBound[referencePointIDs[i]]||distancesToReferencePoints[i] < lowerBound[referencePointIDs[i]]) return false;
     }
     return true;
+  }
+  
+  protected static void computeBounds(DoubleIntPair[] queryPivotDistances, double radius, double[] upperBound, double[] lowerBound) {
+    for(int i = 0; i < queryPivotDistances.length; i++) {
+      upperBound[i] = queryPivotDistances[i].first + radius;
+      lowerBound[i] = queryPivotDistances[i].first - radius;
+    }
   }
 
   /**
@@ -507,9 +509,14 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
       // Array used for iterating over clusters
       DoubleIntPair[] rankedReferencePoints = Arrays.copyOf(referencePointDistances, numberOfReferencePoints);
       Arrays.sort(rankedReferencePoints);
+      
+      double[] lowerBound = new double[referencePointDistances.length];
+      double[] upperBound = new double[referencePointDistances.length];
 
       KNNHeap kNNHeap = DBIDUtil.newHeap(k);
       double kDistanceUpperBound = Double.POSITIVE_INFINITY;
+      
+      computeBounds(referencePointDistances, kDistanceUpperBound, upperBound, lowerBound);
       for(DoubleIntPair currentPair : rankedReferencePoints) {
         final int pivot = currentPair.second;
         final double queryPivotDistance = currentPair.first;
@@ -571,7 +578,7 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
             }
           }
           // pivot filtering
-          boolean success = pivotFilteringMaxDeviation(kDistanceUpperBound, nextObjectIndex, distancesToReferencePoints, referencePointIDs, referencePointDistances);
+          boolean success = pivotFilteringMaxDeviation(distancesToReferencePoints[nextObjectIndex], referencePointIDs[nextObjectIndex], upperBound, lowerBound);
 
           if(success) {
             indexedRelationIter.seek(nextObjectIndex);
@@ -579,7 +586,7 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
             if(distance < kDistanceUpperBound) {
               kNNHeap.insert(distance, indexedRelationIter);
               kDistanceUpperBound = kNNHeap.getKNNDistance();
-
+              computeBounds(referencePointDistances, kDistanceUpperBound, upperBound, lowerBound);
               // adjust bounds
               lowerDistanceBound = queryPivotDistance - kDistanceUpperBound;
               upperDistanceBound = queryPivotDistance + kDistanceUpperBound;
@@ -632,6 +639,10 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
       DBIDUtil.ensureArray(relation.getDBIDs());
 
       final DBIDArrayIter indexedRelationIter = indexedRelation.iter();
+      double[] lowerBound = new double[referencePointDistances.length];
+      double[] upperBound = new double[referencePointDistances.length];
+      
+      computeBounds(referencePointDistances, searchRadius, upperBound, lowerBound);
 
       for(DoubleIntPair currentPair : rankedReferencePoints) {
         final int pivot = currentPair.second;
@@ -668,7 +679,7 @@ public class InMemoryMIndex<O> extends AbstractRefiningIndex<O> implements Range
             break;
 
           // Pivot Filtering
-          boolean success = pivotFilteringMaxDeviation(searchRadius, dataPointIterator.objectID(), distancesToReferencePoints, referencePointIDs, referencePointDistances);
+          boolean success = pivotFilteringMaxDeviation(distancesToReferencePoints[dataPointIterator.objectID()], referencePointIDs[dataPointIterator.objectID()], upperBound, lowerBound);
           if(!success) {
             dataPointIterator.advance();
             continue;
