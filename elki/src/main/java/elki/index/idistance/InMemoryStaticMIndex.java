@@ -118,7 +118,7 @@ public class InMemoryStaticMIndex<O> extends InMemoryDynamicMIndex<O>{
       /**
        * Max number of layers.
        */
-      public static final OptionID LMAX_ID = new OptionID("Dynamic M-Index.lmax", "Maximum number of layers.");
+      public static final OptionID LMAX_ID = new OptionID("Dynamic-M-Index.lmax", "Maximum number of layers.");
 
       /**
        * Distance function to use.

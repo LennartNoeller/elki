@@ -170,7 +170,7 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
       }
       dynamicClusterTree[i] = newNode;
     }
-    logTreeLayout();
+    //logTreeLayout();
   }
 
   @SuppressWarnings("unchecked")
@@ -228,11 +228,12 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
       System.out.println(log);
     }
   }
-  @SuppressWarnings("unchecked")
+  @SuppressWarnings({ "unchecked", "rawtypes" })
   public String recursiveTreeLog(TreeNode node, String log) {
     
     if(node instanceof InMemoryDynamicMIndex.LeafNode) {
-      return log.concat("(leafnode, p: " + node.currentReferencePointIndex + ", l: " + node.level + ", size: " + node.size +"), ");
+      InMemoryDynamicMIndex.LeafNode leaf = (LeafNode) node;
+      return log.concat("(leafnode, p: " + node.currentReferencePointIndex + ", l: " + node.level + ", size: " + node.size + ", rmin: " + node.rmin + ", realrmin: " + leaf.objects.getDistance(0)  + ", rmax: " + node.rmax + ", realmax: " + leaf.objects.getDistance(node.size-1) +"), ");
     }
     else if(node instanceof InMemoryDynamicMIndex.InternalNode) {
       InternalNode current = (InternalNode) node;
@@ -409,19 +410,13 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
       }
 
       // split objects into partitions
-      final elki.index.idistance.InMemoryDynamicMIndex.DoubleIntegerList.DoubleIntegerListIter objectIterator = objects.iter();
-      for(int i = 0; i < size; i++) {
+      for(elki.index.idistance.InMemoryDynamicMIndex.DoubleIntegerList.DoubleIntegerListIter objectIterator = objects.iter(); objectIterator.valid(); objectIterator.advance()) {
         partitionedObjects[newClusterIndices[referencePointIDs[objectIterator.objectID()][level + 1]]].add(objectIterator.pair());
-        if(objectIterator.distance() > maxRadii[newClusterIndices[referencePointIDs[i][level + 1]]])
-          maxRadii[newClusterIndices[referencePointIDs[i][level + 1]]] = objectIterator.distance();
-        if(objectIterator.distance() < minRadii[newClusterIndices[referencePointIDs[i][level + 1]]])
-          minRadii[newClusterIndices[referencePointIDs[i][level + 1]]] = objectIterator.distance();
-        objectIterator.advance();
       }
 
-      // sort partitions
       for(int i = 0; i < numberOfNewClusters; i++) {
-        partitionedObjects[i].sort();
+        minRadii[i] = partitionedObjects[i].getFirst().first;
+        maxRadii[i] = partitionedObjects[i].getLast().first;
       }
 
       // create child nodes
@@ -549,7 +544,17 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
       assert (index < size);
       return distances[index];
     }
-
+    
+    protected DoubleIntPair getFirst() {
+      assert (size > 0);
+      return new DoubleIntPair(distances[0], objectIDs[0]);
+    }
+    
+    protected DoubleIntPair getLast() {
+      assert (size > 0);
+      return new DoubleIntPair(distances[size-1], objectIDs[size-1]);
+    }
+    
     /**
      * Get distance ID pair.
      * 
@@ -558,7 +563,7 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
     protected DoubleIntPair getPair(int index) {
       assert (index >= 0);
       assert (index < size);
-      return new DoubleIntPair(distances[0], objectIDs[index]);
+      return new DoubleIntPair(distances[index], objectIDs[index]);
     }
 
     /**
@@ -730,10 +735,10 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
       double searchRadius = kNNHeap.getKNNDistance();
       if(root instanceof InMemoryDynamicMIndex.LeafNode) {
         LeafNode leaf = (LeafNode) root;
-        final int pivot = leaf.currentReferencePointIndex;
-
-        double lowerDistanceBound = referencePointDistances[pivot].first - searchRadius;
-        double upperDistanceBound = referencePointDistances[pivot].first + searchRadius;
+        
+        final double queryPivotDistance = referencePointDistances[leaf.primaryReferencePointIndex].first;
+        double lowerDistanceBound = queryPivotDistance - searchRadius;
+        double upperDistanceBound = queryPivotDistance + searchRadius;
 
         // Range Pivot Distance Constraint
         if(upperDistanceBound < leaf.rmin)
@@ -748,12 +753,8 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
 
         // move iterator to first object with a larger distance to its
         // pivot than kDistanceUpperBound
-        double queryPivotDistance = referencePointDistances[leaf.primaryReferencePointIndex].first;
         binarySearch(currentPartition, forwardIterator, queryPivotDistance);
         backwardIterator.seek(forwardIterator.getOffset() - 1);
-
-        lowerDistanceBound = referencePointDistances[leaf.primaryReferencePointIndex].first - searchRadius;
-        upperDistanceBound = referencePointDistances[leaf.primaryReferencePointIndex].first + searchRadius;
 
         boolean searchForward = forwardIterator.valid();
         boolean searchBackward = backwardIterator.valid();
@@ -907,9 +908,8 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
         return;
       if(root instanceof InMemoryDynamicMIndex.LeafNode) {
         LeafNode leaf = (LeafNode) root;
-        final int pivot = leaf.currentReferencePointIndex;
-        double lowerDistanceBound = referencePointDistances[pivot].first - searchRadius;
-        double upperDistanceBound = referencePointDistances[pivot].first + searchRadius;
+        final double lowerDistanceBound = referencePointDistances[leaf.primaryReferencePointIndex].first - searchRadius;
+        final double upperDistanceBound = referencePointDistances[leaf.primaryReferencePointIndex].first + searchRadius;
 
         // Range Pivot Distance Constraint
         if(upperDistanceBound < leaf.rmin)
@@ -921,8 +921,6 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
         final elki.index.idistance.InMemoryDynamicMIndex.DoubleIntegerList.DoubleIntegerListIter partitionIterator = currentPartition.iter();
         final DBIDArrayIter dataPointIter = indexedRelation.iter();
         // move iterator to first object within distance range
-        lowerDistanceBound = referencePointDistances[leaf.primaryReferencePointIndex].first - searchRadius;
-        upperDistanceBound = referencePointDistances[leaf.primaryReferencePointIndex].first + searchRadius;
         binarySearch(currentPartition, partitionIterator, lowerDistanceBound);
         if(!partitionIterator.valid() || partitionIterator.distance() > upperDistanceBound)
           return;
@@ -1066,12 +1064,12 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
       /**
        * Max number of layers.
        */
-      public static final OptionID LMAX_ID = new OptionID("Dynamic M-Index.lmax", "Maximum number of layers.");
+      public static final OptionID LMAX_ID = new OptionID("Dynamic-M-Index.lmax", "Maximum number of layers.");
 
       /**
        * Maximum number of objects in non max level clusters.
        */
-      public static final OptionID MAX_CLUSTER_SIZE_ID = new OptionID("Dynamix M-Index.maxClusterSize", "Maximum number of objects in non max level clusters.");
+      public static final OptionID MAX_CLUSTER_SIZE_ID = new OptionID("Dynamic-M-Index.maxClusterSize", "Maximum number of objects in non max level clusters.");
 
       /**
        * Distance function to use.
