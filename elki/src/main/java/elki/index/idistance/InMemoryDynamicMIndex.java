@@ -405,8 +405,6 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
 
       for(int i = 0; i < numberOfNewClusters; i++) {
         partitionedObjects[i] = new DoubleIntegerList(newClusterSizes[clusterReferencePoints[i]]);
-        minRadii[i] = Double.POSITIVE_INFINITY;
-        maxRadii[i] = Double.NEGATIVE_INFINITY;
       }
 
       // split objects into partitions
@@ -704,8 +702,7 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
         // Double Pivot Distance Constraint
         if((queryPivotDistance - rankedReferencePoints[0].first) > 2 * kDistanceUpperBound)
           break;
-        final boolean[] inDoublePivotDistanceConstraint = doublePivotDistanceConstraint(referencePointDistances, closestReferencePointID, kDistanceUpperBound);
-        recursiveKNNSearch(dynamicClusterTree[pivot], referencePointDistances, inDoublePivotDistanceConstraint, queryObject, closestReferencePointID, false, upperBound, lowerBound, kNNHeap);
+        recursiveKNNSearch(dynamicClusterTree[pivot], referencePointDistances, queryObject, closestReferencePointID, false, upperBound, lowerBound, kNNHeap);
       }
       KNNList list = kNNHeap.toKNNList();
       return list;
@@ -729,10 +726,11 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
      * @param kNNHeap                         Heap that stores the found objects
      */
     @SuppressWarnings("unchecked")
-    private void recursiveKNNSearch(TreeNode root, DoubleIntPair[] referencePointDistances, boolean[] inDoublePivotDistanceConstraint, O queryObject, int closestReferencePointID, boolean wasInClosestCluster, double[] upperBound, double[] lowerBound, KNNHeap kNNHeap) {
-      if(!wasInClosestCluster && !inDoublePivotDistanceConstraint[root.currentReferencePointIndex])
-        return;
+    private void recursiveKNNSearch(TreeNode root, DoubleIntPair[] referencePointDistances, O queryObject, int closestReferencePointID, boolean wasInClosestCluster, double[] upperBound, double[] lowerBound, KNNHeap kNNHeap) {
       double searchRadius = kNNHeap.getKNNDistance();
+      // Double-Pivot Distance Constraint
+      if(!wasInClosestCluster && referencePointDistances[root.currentReferencePointIndex].first - referencePointDistances[closestReferencePointID].first > 2 * searchRadius)
+        return;
       if(root instanceof InMemoryDynamicMIndex.LeafNode) {
         LeafNode leaf = (LeafNode) root;
         
@@ -740,7 +738,7 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
         double lowerDistanceBound = queryPivotDistance - searchRadius;
         double upperDistanceBound = queryPivotDistance + searchRadius;
 
-        // Range Pivot Distance Constraint
+        // Range Pivot Distance Constraints
         if(upperDistanceBound < leaf.rmin)
           return;
         if(lowerDistanceBound > leaf.rmax)
@@ -833,7 +831,7 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
           }
         });
         for(int i = 0; i < node.children.length; i++) {
-          recursiveKNNSearch(node.children[searchOrder[i]], referencePointDistances, inDoublePivotDistanceConstraint, queryObject, closestReferencePointID, isClosest, upperBound, lowerBound, kNNHeap);
+          recursiveKNNSearch(node.children[searchOrder[i]], referencePointDistances, queryObject, closestReferencePointID, isClosest || wasInClosestCluster, upperBound, lowerBound, kNNHeap);
         }
       }
     }
@@ -915,7 +913,7 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
         if(upperDistanceBound < leaf.rmin)
           return;
         if(lowerDistanceBound > leaf.rmax)
-          return ;
+          return;
 
         final DoubleIntegerList currentPartition = leaf.objects;
         final elki.index.idistance.InMemoryDynamicMIndex.DoubleIntegerList.DoubleIntegerListIter partitionIterator = currentPartition.iter();
