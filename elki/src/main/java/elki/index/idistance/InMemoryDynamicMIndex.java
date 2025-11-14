@@ -170,6 +170,7 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
       }
       dynamicClusterTree[i] = newNode;
     }
+    //System.out.println("Total number of Clusters: "+ countClusters());
     //logTreeLayout();
   }
 
@@ -228,12 +229,11 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
       System.out.println(log);
     }
   }
-  @SuppressWarnings({ "unchecked", "rawtypes" })
+  @SuppressWarnings({ "unchecked" })
   public String recursiveTreeLog(TreeNode node, String log) {
     
     if(node instanceof InMemoryDynamicMIndex.LeafNode) {
-      InMemoryDynamicMIndex.LeafNode leaf = (LeafNode) node;
-      return log.concat("(leafnode, p: " + node.currentReferencePointIndex + ", l: " + node.level + ", size: " + node.size + ", rmin: " + node.rmin + ", realrmin: " + leaf.objects.getDistance(0)  + ", rmax: " + node.rmax + ", realmax: " + leaf.objects.getDistance(node.size-1) +"), ");
+      return log.concat("(leafnode, p: " + node.currentReferencePointIndex + ", l: " + node.level + ", size: " + node.size + ", rmin: " + node.rmin + ", rmax: " + node.rmax + "), ");
     }
     else if(node instanceof InMemoryDynamicMIndex.InternalNode) {
       InternalNode current = (InternalNode) node;
@@ -245,6 +245,28 @@ public class InMemoryDynamicMIndex<O> extends AbstractRefiningIndex<O> implement
       return newLog;
     }
     return log;
+  }
+  public int countClusters() {
+    int counter = 0;
+    for(int i = 0; i < dynamicClusterTree.length; i++) {
+      counter += recursiveClusterCounter(dynamicClusterTree[i]);
+    }
+    return counter;
+  }
+  @SuppressWarnings({ "unchecked"})
+  public int recursiveClusterCounter(TreeNode node) {
+    if(node instanceof InMemoryDynamicMIndex.LeafNode) {
+      return 1;
+    }
+    else if(node instanceof InMemoryDynamicMIndex.InternalNode) {
+      InternalNode current = (InternalNode) node;
+      int subtreesize = 1;
+      for (int i = 0; i < current.children.length;i++) {
+        subtreesize += recursiveClusterCounter(current.children[i]);
+      }
+      return subtreesize;
+    }
+    return 0;
   }
 
   /**
